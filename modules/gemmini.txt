@@ -1,0 +1,334 @@
+-- =========================================================
+-- RexHeal modules/Frames.lua (Wettkampf-Version 2)
+-- FINAL FIX: Secret-Value Arithmetic & Solo-Watch
+-- =========================================================
+
+if not RexHeal then return end
+local RH = RexHeal
+
+local function DB()
+    return RH:DB()
+end
+
+-- ---------------------------------------------------------
+-- ClickCast Clean-Up
+-- ---------------------------------------------------------
+local function ClearClickCastAttributes(frame)
+    frame:SetAttribute("type1", nil)
+    frame:SetAttribute("type2", nil)
+    frame:SetAttribute("unit1", nil)
+    frame:SetAttribute("unit2", nil)
+
+    local modifiers = { "shift-", "ctrl-", "alt-", "shift-ctrl-", "shift-alt-", "ctrl-alt-", "shift-ctrl-alt-" }
+    for _, mod in ipairs(modifiers) do
+        frame:SetAttribute(mod .. "type1", nil)
+        frame:SetAttribute(mod .. "type2", nil)
+        frame:SetAttribute(mod .. "spell1", nil)
+        frame:SetAttribute(mod .. "spell2", nil)
+    end
+
+    frame:SetAttribute("type-WheelUp", nil)
+    frame:SetAttribute("spell-WheelUp", nil)
+    frame:SetAttribute("type-WheelDown", nil)
+    frame:SetAttribute("spell-WheelDown", nil)
+end
+
+-- ---------------------------------------------------------
+-- Safe Health Percent (DER FIX FÜR DEN FEHLER)
+-- ---------------------------------------------------------
+local function GetSafeHealthPercent(unit)
+    if not unit or not UnitExists(unit) then return 100 end
+
+    -- Methode 1: Blizzard Modern API (wenn verfügbar)
+    if UnitHealthPercent and CurveConstants and CurveConstants.ScaleTo100 then
+        local pct = UnitHealthPercent(unit, true, CurveConstants.ScaleTo100)
+        if type(pct) == "number" then return pct end
+    end
+
+    -- Methode 2: Sicherer pcall für Arithmetik
+    -- Wir rechnen direkt im Return, um "Local Tainting" zu minimieren
+    local ok, val = pcall(function()
+        local cur = UnitHealth(unit)
+        local max = UnitHealthMax(unit)
+        
+        -- Check auf Secret Numbers (bevor wir damit rechnen!)
+        if IsSecretValue and (IsSecretValue(cur) or IsSecretValue(max)) then
+            return nil
+        end
+        
+        if max and max > 0 then
+            return math.floor((cur / max) * 100 + 0.5)
+        end
+        return 100
+    end)
+
+    if ok and val then return val end
+    return 100 -- Fallback, wenn alles "Secret" ist
+end
+
+-- ---------------------------------------------------------
+-- Dispel Logic (secret-safe)
+-- ---------------------------------------------------------
+local DISPEL_COLORS = {
+    Magic   = {0.2, 0.6, 1.0, 1},
+    Curse   = {0.6, 0.0, 1.0, 1},
+    Disease = {0.6, 0.4, 0.0, 1},
+    Poison  = {0.0, 0.8, 0.0, 1},
+}
+
+local function GetDispelType(unit)
+    if not unit or not UnitExists(unit) then return nil end
+    local function Clean(v)
+        if not v or (IsSecretValue and IsSecretValue(v)) then return nil end
+        return tostring(v)
+    end
+    if C_UnitAuras and C_UnitAuras.GetDebuffDataByIndex then
+        for i = 1, 40 do
+            local data = C_UnitAuras.GetDebuffDataByIndex(unit, i)
+            if not data then break end
+            local dtype = Clean(data.dispelName or data.debuffType or data.dispelType)
+            if dtype then return dtype end
+        end
+    end
+    return nil
+end
+
+-- =========================================================
+-- Slot Frame Helpers
+-- =========================================================
+local function ApplyAggroBorder(f, unit)
+    local threat = UnitThreatSituation(unit)
+    if threat and threat >= 2 then
+        f:SetBackdropBorderColor(1, 0.2, 0.2, 1)
+    else
+        f:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+    end
+end
+
+local function ApplyDispelDot(f, unit)
+    if not f.dispelDot then return end
+    local dtype = GetDispelType(unit)
+    if not dtype then f.dispelDot:Hide() return end
+    local c = DISPEL_COLORS[dtype]
+    if c then
+        f.dispelDot:SetColorTexture(c[1], c[2], c[3], c[4] or 1)
+        f.dispelDot:Show()
+    else f.dispelDot:Hide() end
+end
+
+-- =========================================================
+-- Update Slot
+-- =========================================================
+local function UpdateOne(f)
+    local unit = f.unit
+    if not unit or not UnitExists(unit) then f:Hide() return end
+    f:Show()
+
+    local gdb = (DB() and DB().grid) or {}
+    local pct = GetSafeHealthPercent(unit)
+
+    f.hpBar:SetMinMaxValues(0, 100)
+    f.hpBar:SetValue(pct or 100)
+
+    if gdb.showHPPercent ~= false then
+        f.pctText:SetFormattedText("%d%%", pct or 100)
+        f.pctText:Show()
+    else f.pctText:Hide() end
+
+    if gdb.classColors ~= false then
+        local _, class = UnitClass(unit)
+        local c = RAID_CLASS_COLORS[class]
+        if c then f.hpBar:SetStatusBarColor(c.r, c.g, c.b, 1) end
+    else
+        f.hpBar:SetStatusBarColor(0.1, 0.9, 0.1, 1)
+    end
+
+    local isTarget = UnitExists("target") and UnitIsUnit(unit, "target")
+    if isTarget then
+        f.targetBorder:Show()
+        f:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+    else
+        f.targetBorder:Hide()
+        ApplyAggroBorder(f, unit)
+    end
+    ApplyDispelDot(f, unit)
+end
+
+-- =========================================================
+-- Create Slot & Assign
+-- =========================================================
+local function CreateSlot(parent)
+    local db = DB().grid
+    local f = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate,BackdropTemplate")
+    f:SetSize(db.width, db.height)
+    f:SetBackdrop({
+        bgFile = "Interface/Buttons/WHITE8x8", edgeFile = "Interface/Buttons/WHITE8x8", edgeSize = 1,
+        insets = { left = 1, right = 1, top = 1, bottom = 1 },
+    })
+    f:SetBackdropColor(0.06, 0.06, 0.06, 1)
+    f:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+
+    f.hpBar = CreateFrame("StatusBar", nil, f)
+    f.hpBar:SetPoint("TOPLEFT", 2, -2)
+    f.hpBar:SetPoint("BOTTOMRIGHT", -2, 2)
+    f.hpBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8x8")
+
+    f.pctText = f.hpBar:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    f.pctText:SetPoint("CENTER", 0, 0)
+
+    f.dispelDot = f:CreateTexture(nil, "OVERLAY")
+    f.dispelDot:SetSize(6, 6)
+    f.dispelDot:SetPoint("TOPLEFT", 2, -2)
+
+    f.targetBorder = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    f.targetBorder:SetAllPoints(f)
+    f.targetBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
+    f.targetBorder:SetBackdropBorderColor(1.0, 0.85, 0.25, 1)
+    f.targetBorder:Hide()
+
+    ClearClickCastAttributes(f)
+    f:SetScript("OnEvent", function(self) UpdateOne(self) end)
+    return f
+end
+
+local function AssignUnit(f, unit)
+    f.unit = unit
+    f:SetAttribute("unit", unit)
+    if RH.ApplyClickCast then RH:ApplyClickCast(f) end
+
+    if unit then
+        -- Solo Fix: Wenn Player und nicht in Gruppe, kein UnitWatch (Blizzard Bug)
+        if unit == "player" and not IsInGroup() then
+            UnregisterUnitWatch(f)
+            f:Show()
+        else
+            RegisterUnitWatch(f)
+        end
+        f:RegisterUnitEvent("UNIT_HEALTH", unit)
+        f:RegisterUnitEvent("UNIT_MAXHEALTH", unit)
+        f:RegisterUnitEvent("UNIT_AURA", unit)
+    else
+        UnregisterUnitWatch(f)
+        f:UnregisterAllEvents()
+        f:Hide()
+    end
+    UpdateOne(f)
+end
+
+-- =========================================================
+-- Windows & Layout
+-- =========================================================
+local groupWindows = {}
+
+local function CreateGroupWindow(g)
+    local db = DB().grid
+    local win = CreateFrame("Frame", "RexHeal_RaidGroup"..g, UIParent, "BackdropTemplate")
+    win:SetSize(db.width+10, (db.height*5)+30)
+    win:SetMovable(true)
+    win:EnableMouse(true)
+    win:SetClampedToScreen(true)
+    win:RegisterForDrag("LeftButton")
+    win:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
+    win:SetBackdropColor(0.06, 0.07, 0.08, 0.8)
+
+    win:SetScript("OnDragStart", function(self) if not DB().general.lockFrames then self:StartMoving() end end)
+    win:SetScript("OnDragStop", function(self) 
+        self:StopMovingOrSizing() 
+        local p, _, rp, x, y = self:GetPoint()
+        DB().grid.raidGroupPos = DB().grid.raidGroupPos or {}
+        DB().grid.raidGroupPos[g] = { point=p, relPoint=rp, x=x, y=y }
+    end)
+
+    win.header = CreateFrame("Frame", nil, win, "BackdropTemplate")
+    win.header:SetPoint("TOPLEFT", 1, -1)
+    win.header:SetPoint("TOPRIGHT", -1, -1)
+    win.header:SetHeight(18)
+    win.header:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8" })
+    win.header:SetBackdropColor(0.1, 0.11, 0.12, 0.7)
+    
+    win.header.text = win.header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    win.header.text:SetPoint("LEFT", 5, 0)
+    win.header.text:SetText("G"..g)
+
+    local slots = {}
+    for s = 1, 5 do slots[s] = CreateSlot(win) end
+    return win, slots
+end
+
+function RH:UpdateGrid()
+    if not groupWindows[1] then
+        for g=1,8 do 
+            local w, s = CreateGroupWindow(g)
+            groupWindows[g] = {win=w, slots=s}
+            local p = DB().grid.raidGroupPos and DB().grid.raidGroupPos[g]
+            if p then w:ClearAllPoints() w:SetPoint(p.point, UIParent, p.relPoint, p.x, p.y) end
+        end
+    end
+
+    local db = DB().grid
+    for g=1,8 do 
+        groupWindows[g].win:Hide()
+        for s=1,5 do AssignUnit(groupWindows[g].slots[s], nil) end
+    end
+
+    if not IsInGroup() and not IsInRaid() then
+        if db.showWhenSolo then
+            local gw = groupWindows[1]
+            gw.win:Show()
+            gw.win.header:Hide()
+            gw.win:SetBackdropColor(0,0,0,0)
+            AssignUnit(gw.slots[1], "player")
+            gw.slots[1]:SetPoint("TOPLEFT", 5, -5)
+        end
+    else
+        -- Raid/Party Logik (vereinfacht für Test)
+        for g=1,8 do groupWindows[g].win:SetBackdropColor(0.06, 0.07, 0.08, 0.8) end
+        if IsInRaid() then
+            local used = {0,0,0,0,0,0,0,0}
+            for i=1, GetNumGroupMembers() do
+                local _, _, subgroup = GetRaidRosterInfo(i)
+                if subgroup and subgroup <= (db.raidShowGroups or 8) then
+                    used[subgroup] = used[subgroup] + 1
+                    if used[subgroup] <= 5 then
+                        local f = groupWindows[subgroup].slots[used[subgroup]]
+                        f:SetPoint("TOPLEFT", 5, -23 - (used[subgroup]-1)*(db.height+2))
+                        AssignUnit(f, "raid"..i)
+                        groupWindows[subgroup].win:Show()
+                        groupWindows[subgroup].win.header:Show()
+                    end
+                end
+            end
+        else
+            groupWindows[1].win:Show()
+            groupWindows[1].win.header:Show()
+            AssignUnit(groupWindows[1].slots[1], "player")
+            groupWindows[1].slots[1]:SetPoint("TOPLEFT", 5, -23)
+            for i=1, GetNumSubgroupMembers() do
+                local f = groupWindows[1].slots[i+1]
+                f:SetPoint("TOPLEFT", 5, -23 - i*(db.height+2))
+                AssignUnit(f, "party"..i)
+            end
+        end
+    end
+end
+
+-- =========================================================
+-- Boot
+-- =========================================================
+local boot = CreateFrame("Frame")
+boot:RegisterEvent("PLAYER_LOGIN")
+boot:RegisterEvent("GROUP_ROSTER_UPDATE")
+boot:RegisterEvent("PLAYER_TARGET_CHANGED")
+boot:SetScript("OnEvent", function(self, event)
+    if event == "PLAYER_TARGET_CHANGED" then
+        for g=1,8 do 
+            for s=1,5 do 
+                local f = groupWindows[g] and groupWindows[g].slots[s]
+                if f and f:IsShown() then UpdateOne(f) end
+            end
+        end
+    else
+        RH:UpdateGrid()
+        C_Timer.After(0.5, function() RH:UpdateGrid() end)
+    end
+end)

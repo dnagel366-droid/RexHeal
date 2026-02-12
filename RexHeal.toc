@@ -1,0 +1,13 @@
+## Interface: 120000
+## Title: RexHeal
+## Notes: Einfaches Heiler-Addon (MVP) – Grid + ClickCast
+## Author: Daniel Nagel
+## Version: 0.1.0-Alpha
+## SavedVariables: RexHealDB
+## IconTexture: Interface/AddOns/RexHeal/RexUILogo.tga
+
+core/DB.lua
+core/Core.lua
+modules/Frames.lua
+modules/ClickCast.lua
+config/Config.lua
