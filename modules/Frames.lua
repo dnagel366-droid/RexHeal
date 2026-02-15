@@ -5,26 +5,68 @@
 -- 1) Fenster-Position pro Gruppe speichern
 -- 2) Gruppen 1..8 einstellbar (raidShowGroups)
 -- 3) Aggro-Rahmen rot
--- 4) Dispel Hinweis (Modern API Fix)  ✅ Secret-Index Fix
--- 5) ClickCast Hook (FIXED: Target + Heal + Party Support)
+-- 4) Dispel Hinweis (Modern API Fix)  ✅ über modules/Dispel.lua (secret-safe)
+-- 5) ClickCast Hook (Target + Heal + Party Support)
 -- 6) Anzeige-Flags (HP% / Klassenfarben / Mana / Rollenicon)
--- 7) Target-Highlight (Gelber 2px Overlay-Rahmen) ✅ FINAL
--- + Solo Anzeige optional (showWhenSolo) ✅ Reload/Login FIX (UnitWatch + Position)
+-- 7) Target-Highlight (Gelber 2px Overlay-Rahmen)
+-- + Solo Anzeige optional (showWhenSolo) ✅ Reload/Login FIX
+-- + Combat Lockdown Fix ✅ (kein Show/Hide/SetAttribute im Kampf)
 -- =========================================================
 
 if not RexHeal then return end
 local RH = RexHeal
 
--- DB-shape safe: unterstützt sowohl "profile direkt" als auch "{profile=...}"
+-- ---------------------------------------------------------
+-- DB-shape safe
+-- ---------------------------------------------------------
 local function DB()
     local d = RH:DB()
     if d and d.profile then return d.profile end
     return d
 end
 
--- ---------------------------------------------------------
+local function InCombat() return InCombatLockdown() end
+
+-- =========================================================
+-- Combat-safe Visible Handling (für Secure Buttons!)
+-- - Im Kampf: KEIN Show/Hide -> nur Alpha
+-- - Out of Combat: Show/Hide normal
+-- =========================================================
+local function SafeSetVisible(frame, visible)
+    if not frame then return end
+
+    if InCombat() then
+        frame:SetAlpha(visible and 1 or 0)
+        frame._rhWantedVisible = visible and true or false
+        return
+    end
+
+    frame._rhWantedVisible = nil
+    frame:SetAlpha(visible and 1 or 0)
+    if visible then frame:Show() else frame:Hide() end
+end
+
+local function ApplyWantedVisibilityAfterCombat()
+    if not RH._groupWindows then return end
+
+    for g = 1, 8 do
+        local gw = RH._groupWindows[g]
+        if gw and gw.slots then
+            for s = 1, 5 do
+                local f = gw.slots[s]
+                if f and f._rhWantedVisible ~= nil then
+                    local v = f._rhWantedVisible
+                    f._rhWantedVisible = nil
+                    SafeSetVisible(f, v)
+                end
+            end
+        end
+    end
+end
+
+-- =========================================================
 -- ClickCast Clean-Up
--- ---------------------------------------------------------
+-- =========================================================
 local function ClearClickCastAttributes(frame)
     frame:SetAttribute("type1", nil)
     frame:SetAttribute("type2", nil)
@@ -39,16 +81,15 @@ local function ClearClickCastAttributes(frame)
         frame:SetAttribute(mod .. "spell2", nil)
     end
 
-    -- Mousewheel (Secure) – EINMALIG (nicht in der Schleife)
     frame:SetAttribute("type-WheelUp", nil)
     frame:SetAttribute("spell-WheelUp", nil)
     frame:SetAttribute("type-WheelDown", nil)
     frame:SetAttribute("spell-WheelDown", nil)
 end
 
--- ---------------------------------------------------------
+-- =========================================================
 -- Safe Health Percent (secret/arithmetik-safe)
--- ---------------------------------------------------------
+-- =========================================================
 local function GetSafeHealthPercent(unit)
     if not unit or not UnitExists(unit) then return nil end
 
@@ -77,84 +118,15 @@ local function GetSafeHealthPercent(unit)
     return nil
 end
 
--- ---------------------------------------------------------
--- Dispel Logic (secret-safe)
--- ---------------------------------------------------------
-local DISPEL_COLORS = {
-    Magic   = {0.2, 0.6, 1.0, 1},
-    Curse   = {0.6, 0.0, 1.0, 1},
-    Disease = {0.6, 0.4, 0.0, 1},
-    Poison  = {0.0, 0.8, 0.0, 1},
-}
-
-local function GetDispelType(unit)
-    if not unit or not UnitExists(unit) then return nil end
-
-    local function CleanType(v)
-        if not v then return nil end
-        if IsSecretValue and IsSecretValue(v) then return nil end
-        return tostring(v)
-    end
-
-    if C_UnitAuras and C_UnitAuras.GetDebuffDataByIndex then
-        for i = 1, 40 do
-            local data = C_UnitAuras.GetDebuffDataByIndex(unit, i)
-            if not data then break end
-            local dispelType = CleanType(data.dispelName or data.debuffType or data.dispelType)
-            if dispelType then return dispelType end
-        end
-        return nil
-    end
-
-    if UnitDebuff then
-        for i = 1, 40 do
-            local name, _, _, dispelType = UnitDebuff(unit, i)
-            if not name then break end
-            dispelType = CleanType(dispelType)
-            if dispelType then return dispelType end
-        end
-    end
-
-    return nil
-end
-
 -- =========================================================
--- Slot Frame Helpers
+-- Helpers: Aggro / Role / Mana
 -- =========================================================
 local function ApplyAggroBorder(f, unit)
     local threat = UnitThreatSituation(unit)
     if threat and threat >= 2 then
         f:SetBackdropBorderColor(1, 0.2, 0.2, 1)
     else
-        f:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
-    end
-end
-
-local function ApplyDispelDot(f, unit)
-    if not f.dispelDot then return end
-
-    local dtype = GetDispelType(unit)
-    if not dtype then
-        f.dispelDot:Hide()
-        return
-    end
-
-    if IsSecretValue and IsSecretValue(dtype) then
-        f.dispelDot:Hide()
-        return
-    end
-
-    dtype = tostring(dtype)
-
-    local ok, c = pcall(function()
-        return DISPEL_COLORS[dtype]
-    end)
-
-    if ok and type(c) == "table" then
-        f.dispelDot:SetColorTexture(c[1], c[2], c[3], c[4] or 1)
-        f.dispelDot:Show()
-    else
-        f.dispelDot:Hide()
+        f:SetBackdropBorderColor(0.26, 0.28, 0.31, 1)
     end
 end
 
@@ -192,19 +164,18 @@ local function GetManaPercent(unit)
 end
 
 -- =========================================================
--- Update Slot
+-- Update Slot (VISUAL ONLY + COMBAT SAFE)
 -- =========================================================
 local function UpdateOne(f)
     local unit = f.unit
     if not unit then
-        f:Hide()
+        SafeSetVisible(f, false)
         return
     end
 
     if not UnitExists(unit) then
-        -- "player" kann beim Login/Reload kurz wackeln -> nicht hart dauerhaft weg
         if unit == "player" then
-            f:Show()
+            SafeSetVisible(f, true)
             if not f._rhRetry then
                 f._rhRetry = true
                 C_Timer.After(0.10, function()
@@ -217,11 +188,11 @@ local function UpdateOne(f)
             return
         end
 
-        f:Hide()
+        SafeSetVisible(f, false)
         return
     end
 
-    f:Show()
+    SafeSetVisible(f, true)
 
     local pdb = DB()
     local gdb = (pdb and pdb.grid) or {}
@@ -291,10 +262,13 @@ local function UpdateOne(f)
     if not isTarget then
         ApplyAggroBorder(f, unit)
     else
-        f:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+        f:SetBackdropBorderColor(0.26, 0.28, 0.31, 1)
     end
 
-    ApplyDispelDot(f, unit)
+    -- Dispel Dot (kommt aus modules/Dispel.lua)
+    if RH.ApplyDispelDot then
+        RH:ApplyDispelDot(f, unit)
+    end
 end
 
 -- =========================================================
@@ -303,8 +277,8 @@ end
 local function CreateSlot(parent)
     local pdb = DB()
     local db = (pdb and pdb.grid) or {}
-    local f = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate,BackdropTemplate")
 
+    local f = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate,BackdropTemplate")
     f:SetSize(tonumber(db.width) or 70, tonumber(db.height) or 45)
 
     f:SetBackdrop({
@@ -313,8 +287,8 @@ local function CreateSlot(parent)
         edgeSize = 1,
         insets = { left = 1, right = 1, top = 1, bottom = 1 },
     })
-    f:SetBackdropColor(0.06, 0.06, 0.06, 1)
-    f:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+    f:SetBackdropColor(0.10, 0.11, 0.12, 0.72)
+    f:SetBackdropBorderColor(0.26, 0.28, 0.31, 1)
 
     local bar = CreateFrame("StatusBar", nil, f)
     bar:SetPoint("TOPLEFT", 2, -2)
@@ -328,23 +302,26 @@ local function CreateSlot(parent)
     local bg = bar:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints(true)
     bg:SetTexture("Interface\\Buttons\\WHITE8x8")
-    bg:SetVertexColor(0.12, 0.12, 0.12, 1)
+    bg:SetVertexColor(0.08, 0.09, 0.10, 0.90)
     f.hpBg = bg
 
     f.pctText = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     f.pctText:SetPoint("CENTER", bar, "CENTER", 0, 0)
-    f.pctText:SetTextColor(1, 1, 1, 1)
+    f.pctText:SetTextColor(0.95, 0.96, 0.98, 1)
     f.pctText:SetDrawLayer("OVERLAY", 7)
     bar:SetFrameLevel(f:GetFrameLevel() + 5)
 
     f.manaText = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.manaText:SetPoint("BOTTOM", bar, "BOTTOM", 0, 1)
+    f.manaText:SetTextColor(0.80, 0.82, 0.86, 1)
     f.manaText:Hide()
 
-    f.dispelDot = f:CreateTexture(nil, "OVERLAY")
-    f.dispelDot:SetSize(6, 6)
-    f.dispelDot:SetPoint("TOPLEFT", f, "TOPLEFT", 2, -2)
+    -- Dispel Dot (wird durch RH:ApplyDispelDot gesetzt) -> AN DIE BAR, damit er sicher oben liegt
+    f.dispelDot = bar:CreateTexture(nil, "OVERLAY")
+    f.dispelDot:SetSize(12, 12)
+    f.dispelDot:SetPoint("TOPLEFT", bar, "TOPLEFT", 4, -4)
     f.dispelDot:Hide()
+
 
     f.roleIcon = bar:CreateTexture(nil, "OVERLAY")
     f.roleIcon:SetSize(14, 14)
@@ -354,10 +331,7 @@ local function CreateSlot(parent)
     f.targetBorder = CreateFrame("Frame", nil, f, "BackdropTemplate")
     f.targetBorder:SetAllPoints(f)
     f.targetBorder:SetFrameLevel(f:GetFrameLevel() + 50)
-    f.targetBorder:SetBackdrop({
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 2,
-    })
+    f.targetBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 2 })
     f.targetBorder:SetBackdropBorderColor(1.0, 0.85, 0.25, 1)
     f.targetBorder:Hide()
 
@@ -368,13 +342,23 @@ local function CreateSlot(parent)
         UpdateOne(self)
     end)
 
+    -- Start unsichtbar (combat-safe)
+    f:SetAlpha(0)
     return f
 end
 
 -- =========================================================
--- Assign Unit
+-- Assign Unit (SECURE)
+-- - im Kampf: KEIN SetAttribute, kein RegisterUnitWatch!
 -- =========================================================
 local function AssignUnit(f, unit)
+    if InCombat() then
+        f._rhPendingUnit = unit
+        RH._pendingGridUpdate = true
+        return
+    end
+
+    f._rhPendingUnit = nil
     f.unit = unit
     f:SetAttribute("unit", unit)
 
@@ -387,7 +371,6 @@ local function AssignUnit(f, unit)
     if unit then
         if unit == "player" and not IsInGroup() and not IsInRaid() then
             if UnregisterUnitWatch then UnregisterUnitWatch(f) end
-            f:Show()
         else
             if RegisterUnitWatch then RegisterUnitWatch(f) end
         end
@@ -399,12 +382,12 @@ local function AssignUnit(f, unit)
         f:RegisterUnitEvent("UNIT_NAME_UPDATE", unit)
         f:RegisterUnitEvent("UNIT_POWER_UPDATE", unit)
         f:RegisterUnitEvent("UNIT_MAXPOWER", unit)
+
+        UpdateOne(f)
     else
         if UnregisterUnitWatch then UnregisterUnitWatch(f) end
-        f:Hide()
+        SafeSetVisible(f, false)
     end
-
-    UpdateOne(f)
 end
 
 -- =========================================================
@@ -435,23 +418,15 @@ local function CreateGroupWindow(g)
     local PAD = 5
 
     local win = CreateFrame("Frame", "RexHeal_RaidGroup" .. g, UIParent, "BackdropTemplate")
-win:SetClampedToScreen(true)
-win:SetMovable(true)
+    win:SetClampedToScreen(false)
+    win:SetMovable(true)
+    win:EnableMouse(false)
 
--- Hauptfenster fängt KEINE Maus mehr
-win:EnableMouse(false)
-
-    -- ✅ WICHTIG: Fallback-Anchor, damit Fenster nach Reload/Login nicht "pointless" ist
+    -- Fallback anchor
     win:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 
-    win:SetBackdrop({
-        bgFile   = "Interface/Buttons/WHITE8x8",
-        edgeFile = "Interface/Buttons/WHITE8x8",
-        tile = false, tileSize = 0, edgeSize = 1,
-        insets = { left = 1, right = 1, top = 1, bottom = 1 },
-    })
-    win:SetBackdropColor(0.06, 0.07, 0.08, 0.80)
-    win:SetBackdropBorderColor(0.22, 0.24, 0.27, 1)
+    -- Keine Gruppen-Box
+    win:SetBackdrop(nil)
 
     win:SetScript("OnDragStart", function(self)
         local pdb2 = DB()
@@ -464,6 +439,7 @@ win:EnableMouse(false)
         SaveGroupPos(g)
     end)
 
+    -- Header (sichtbar, damit du Gruppen erkennst)
     win.header = CreateFrame("Frame", nil, win, "BackdropTemplate")
     win.header:SetPoint("TOPLEFT", win, "TOPLEFT", 1, -1)
     win.header:SetPoint("TOPRIGHT", win, "TOPRIGHT", -1, -1)
@@ -474,33 +450,35 @@ win:EnableMouse(false)
         tile = false, tileSize = 0, edgeSize = 1,
         insets = { left = 1, right = 1, top = 1, bottom = 1 },
     })
-    win.header:SetBackdropColor(0.10, 0.11, 0.12, 0.70)
-    win.header:SetBackdropBorderColor(0.22, 0.24, 0.27, 1)
+    win.header:SetBackdropColor(0.12, 0.13, 0.14, 0.70)
+    win.header:SetBackdropBorderColor(0.26, 0.28, 0.31, 1)
 
     win.header.text = win.header:CreateFontString(nil, "OVERLAY")
     win.header.text:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
     win.header.text:SetTextColor(0.90, 0.92, 0.95, 1)
     win.header.text:SetPoint("LEFT", win.header, "LEFT", 6, 0)
     win.header.text:SetText("Gruppe " .. g)
-	-- =========================================================
--- DragBar (leichter verschieben)
--- =========================================================
-win.dragBar = CreateFrame("Frame", nil, win)
-win.dragBar:SetPoint("TOPLEFT", win, "TOPLEFT", 0, 0)
-win.dragBar:SetPoint("TOPRIGHT", win, "TOPRIGHT", 0, 0)
-win.dragBar:SetHeight(18) -- gleiche Höhe wie Header
-win.dragBar:EnableMouse(true)
 
-win.dragBar:SetScript("OnMouseDown", function()
-    local pdb2 = DB()
-    if pdb2 and pdb2.general and pdb2.general.lockFrames then return end
-    win:StartMoving()
-end)
+    -- DragBar (nur Header Bereich)
+    -- DragBar (größerer Greifbereich zum Verschieben)
+    win.dragBar = CreateFrame("Frame", nil, win)
+    win.dragBar:SetPoint("TOPLEFT", win, "TOPLEFT", -10, 10)      -- etwas größer als Header
+    win.dragBar:SetPoint("TOPRIGHT", win, "TOPRIGHT", 10, 10)
+    win.dragBar:SetHeight(HEADER_H + 16)                         -- höherer Greifbereich
+    win.dragBar:EnableMouse(true)
+    win.dragBar:SetFrameLevel((win.header and win.header:GetFrameLevel() or win:GetFrameLevel()) + 5)
 
-win.dragBar:SetScript("OnMouseUp", function()
-    win:StopMovingOrSizing()
-    SaveGroupPos(g)
-end)
+
+    win.dragBar:SetScript("OnMouseDown", function()
+        local pdb2 = DB()
+        if pdb2 and pdb2.general and pdb2.general.lockFrames then return end
+        win:StartMoving()
+    end)
+
+    win.dragBar:SetScript("OnMouseUp", function()
+        win:StopMovingOrSizing()
+        SaveGroupPos(g)
+    end)
 
     local slots = {}
     for s = 1, 5 do
@@ -512,16 +490,23 @@ end)
         )
     end
 
-    win:SetSize((tonumber(db.width) or 70) + (PAD * 2), (PAD * 2 + HEADER_H) + 5 * (tonumber(db.height) or 45) + 4 * spacing)
+    win:SetSize(
+        (tonumber(db.width) or 70) + (PAD * 2),
+        (PAD * 2 + HEADER_H) + 5 * (tonumber(db.height) or 45) + 4 * spacing
+    )
+
     return win, slots
 end
 
 local function EnsureGroupWindows()
     if groupWindows[1] then return end
+
     for g = 1, 8 do
         local win, slots = CreateGroupWindow(g)
         groupWindows[g] = { win = win, slots = slots }
     end
+
+    RH._groupWindows = groupWindows
 end
 
 local function ApplyGroupPosOrDefault(g)
@@ -546,6 +531,7 @@ end
 
 local function LayoutDefaultPositions()
     EnsureGroupWindows()
+
     local pdb = DB()
     local db = (pdb and pdb.grid) or {}
 
@@ -558,36 +544,20 @@ local function LayoutDefaultPositions()
 
         local win = groupWindows[g].win
         win:ClearAllPoints()
-        win:SetPoint(
-            "TOPLEFT",
-            UIParent,
-            "TOPLEFT",
-            200 + col * (w + 28),
-            -200 - row * (h * 5 + 30)
-        )
+        win:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 200 + col * (w + 28), -200 - row * (h * 5 + 30))
         SaveGroupPos(g)
     end
 end
 
-local function HideAllGroups()
-    for g = 1, 8 do
-        if groupWindows[g] and groupWindows[g].win then
-            groupWindows[g].win:Hide()
-            for s = 1, 5 do
-                local slot = groupWindows[g].slots[s]
-                if slot then
-                    AssignUnit(slot, nil)
-                    slot:Hide()
-                end
-            end
-        end
-    end
-end
-
 -- =========================================================
--- Update Grid (FINAL: Solo nach Reload/Login sichtbar)
+-- Update Grid (SECURE)
 -- =========================================================
 function RH:UpdateGrid()
+    if InCombat() then
+        RH._pendingGridUpdate = true
+        return
+    end
+
     EnsureGroupWindows()
 
     local root = DB()
@@ -596,7 +566,6 @@ function RH:UpdateGrid()
 
     root.grid = root.grid or {}
     local db = root.grid
-
     if db.showWhenSolo == nil then db.showWhenSolo = true end
 
     local scale      = tonumber(db.scale) or 1.0
@@ -604,13 +573,12 @@ function RH:UpdateGrid()
     local height     = tonumber(db.height) or 45
     local spacing    = tonumber(db.spacing) or 2
     local showGroups = tonumber(db.raidShowGroups) or 8
-
     local showSolo   = (db.showWhenSolo == true)
 
     local HEADER_H = 18
     local PAD = 5
 
-    -- Live Apply: Scale/Size/Spacing + Slot Layout
+    -- Live Apply Layout + pending-unit apply
     for g = 1, 8 do
         local gw = groupWindows[g]
         if gw and gw.win and gw.slots then
@@ -622,76 +590,65 @@ function RH:UpdateGrid()
                 if f then
                     f:SetSize(width, height)
                     f:ClearAllPoints()
-                    f:SetPoint("TOPLEFT", gw.win, "TOPLEFT",
-                        PAD,
+                    f:SetPoint("TOPLEFT", gw.win, "TOPLEFT", PAD,
                         -(PAD + HEADER_H) - (s - 1) * (height + spacing)
                     )
+
+                    if f._rhPendingUnit ~= nil then
+                        local u = f._rhPendingUnit
+                        f._rhPendingUnit = nil
+                        AssignUnit(f, u)
+                    end
                 end
             end
         end
     end
 
-    -- ✅ WICHTIG: Positionen IMMER einmal anwenden (auch SOLO!), bevor Solo-return kommt
+    -- Positions once
     if not RH._groupPositionsReady then
         RH._groupPositionsReady = true
         local any = false
-        for g = 1, 8 do
-            any = ApplyGroupPosOrDefault(g) or any
-        end
+        for g = 1, 8 do any = ApplyGroupPosOrDefault(g) or any end
         if not any then LayoutDefaultPositions() end
     end
 
-    -- =========================================================
+    -- Clear all
+    for g = 1, 8 do
+        groupWindows[g].win:Hide()
+        for s = 1, 5 do
+            AssignUnit(groupWindows[g].slots[s], nil)
+            SafeSetVisible(groupWindows[g].slots[s], false)
+        end
+    end
+
     -- SOLO
-    -- =========================================================
     if not IsInGroup() and not IsInRaid() then
-        HideAllGroups()
         if not showSolo then return end
 
         local gw = groupWindows[1]
         if not gw or not gw.win or not gw.slots or not gw.slots[1] then return end
 
         gw.win:Show()
-
         if gw.win.header then gw.win.header:Hide() end
-		if gw.win.dragBar then gw.win.dragBar:Show() end
-        gw.win:SetBackdropColor(0, 0, 0, 0)
-        gw.win:SetBackdropBorderColor(0, 0, 0, 0)
-        gw.win:SetSize(width + (PAD * 2), height + (PAD * 2))
 
-        local f = gw.slots[1]
-        AssignUnit(f, "player")
-        f:Show()
-        f:ClearAllPoints()
-        f:SetPoint("TOPLEFT", gw.win, "TOPLEFT", PAD, -PAD)
+        AssignUnit(gw.slots[1], "player")
+        SafeSetVisible(gw.slots[1], true)
 
+        gw.slots[1]:ClearAllPoints()
+        gw.slots[1]:SetPoint("TOPLEFT", gw.win, "TOPLEFT", PAD, -(PAD + HEADER_H))
         return
     end
 
-    -- =========================================================
-    -- Gruppenmodus: Style wieder AN
-    -- =========================================================
+    -- In Group: Header wieder an
     for g = 1, 8 do
         local gw = groupWindows[g]
-        if gw and gw.win then
-            if gw.win.header then gw.win.header:Show() end
-            gw.win:SetBackdropColor(0.06, 0.07, 0.08, 0.80)
-            gw.win:SetBackdropBorderColor(0.22, 0.24, 0.27, 1)
+        if gw and gw.win and gw.win.header then
+            gw.win.header:Show()
         end
     end
-
-    -- Clear
-    for g = 1, 8 do
-        groupWindows[g].win:Hide()
-        for s = 1, 5 do
-            AssignUnit(groupWindows[g].slots[s], nil)
-            groupWindows[g].slots[s]:Hide()
-        end
-    end
-
-    local used = {0,0,0,0,0,0,0,0}
 
     -- RAID
+    local used = {0,0,0,0,0,0,0,0}
     if IsInRaid() then
         for i = 1, GetNumGroupMembers() do
             local _, _, subgroup = GetRaidRosterInfo(i)
@@ -701,7 +658,7 @@ function RH:UpdateGrid()
                     local f = groupWindows[subgroup].slots[used[subgroup]]
                     AssignUnit(f, "raid" .. i)
                     groupWindows[subgroup].win:Show()
-                    f:Show()
+                    SafeSetVisible(f, true)
                 end
             end
         end
@@ -711,12 +668,12 @@ function RH:UpdateGrid()
     -- PARTY
     groupWindows[1].win:Show()
     AssignUnit(groupWindows[1].slots[1], "player")
-    groupWindows[1].slots[1]:Show()
+    SafeSetVisible(groupWindows[1].slots[1], true)
 
     for i = 1, GetNumSubgroupMembers() do
         local f = groupWindows[1].slots[i+1]
         AssignUnit(f, "party" .. i)
-        f:Show()
+        SafeSetVisible(f, true)
     end
 end
 
@@ -725,7 +682,7 @@ function RH:CreateGridContainer()
 end
 
 -- =========================================================
--- Grid Boot + zentraler Event-Handler (DB-ready + Retry)
+-- Boot / Events
 -- =========================================================
 local roster = CreateFrame("Frame")
 roster:RegisterEvent("ADDON_LOADED")
@@ -735,11 +692,12 @@ roster:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 roster:RegisterEvent("GROUP_ROSTER_UPDATE")
 roster:RegisterEvent("RAID_ROSTER_UPDATE")
 roster:RegisterEvent("PLAYER_TARGET_CHANGED")
+roster:RegisterEvent("PLAYER_REGEN_ENABLED")
+roster:RegisterEvent("PLAYER_REGEN_DISABLED")
 
 local function FullGridRefresh_Retry(tries)
     tries = (tries or 0)
     if tries > 20 then return end
-
     if not RH or not RH.UpdateGrid then return end
 
     local ok = pcall(function()
@@ -761,6 +719,22 @@ local function FullGridRefresh_Retry(tries)
 end
 
 roster:SetScript("OnEvent", function(self, event, arg1)
+    if event == "PLAYER_REGEN_DISABLED" then
+        RH._inCombat = true
+        return
+    end
+
+    if event == "PLAYER_REGEN_ENABLED" then
+        RH._inCombat = false
+        ApplyWantedVisibilityAfterCombat()
+
+        if RH._pendingGridUpdate then
+            RH._pendingGridUpdate = nil
+            FullGridRefresh_Retry(0)
+        end
+        return
+    end
+
     if event == "ADDON_LOADED" then
         if arg1 ~= "RexHeal" then return end
         FullGridRefresh_Retry(0)
@@ -768,13 +742,16 @@ roster:SetScript("OnEvent", function(self, event, arg1)
     end
 
     if event == "PLAYER_TARGET_CHANGED" then
-        for g = 1, 8 do
-            local gw = groupWindows[g]
-            if gw and gw.slots then
-                for s = 1, 5 do
-                    local f = gw.slots[s]
-                    if f and f:IsShown() and f.unit then
-                        UpdateOne(f)
+        -- Visual only (keine Secure Änderungen nötig)
+        if RH._groupWindows then
+            for g = 1, 8 do
+                local gw = RH._groupWindows[g]
+                if gw and gw.slots then
+                    for s = 1, 5 do
+                        local f = gw.slots[s]
+                        if f and f.unit then
+                            UpdateOne(f)
+                        end
                     end
                 end
             end

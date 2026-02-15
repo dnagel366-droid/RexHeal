@@ -4,11 +4,11 @@
 -- - Fenster: 560x440, verschiebbar, clamped
 -- - Navigation links (Tabs)
 -- - Rechts: Scrollfläche stabil
--- - Allgemein Tab fertig
+-- - Allgemein Tab fertig (inkl. Lock + Blizzard Frames Toggle)
 -- - Grid Tab (Slider + Dropdown, live RH:UpdateGrid())
 -- - Anzeige Tab (HP% / Klassenfarben / Mana / Rollenicon)
 -- - ClickCast Tab: freie Spellnamen per Eingabe (WheelUp/Down + Button 1..16)
--- - Minimap = Platzhalter
+-- - Minimap Tab: Button anzeigen + Position reset
 -- =========================================================
 
 if not RexHeal then return end
@@ -64,17 +64,36 @@ local function SafeRefreshClickCast()
 end
 
 -- =========================================================
--- Minimal ElvUI-ish Helpers
+-- Minimap DB Helper
 -- =========================================================
-local function CreateBackdrop(frame, alpha)
+local function MiniDB()
+    local db = DB()
+    db.minimapButton = db.minimapButton or {}
+    if db.minimapButton.hide == nil then db.minimapButton.hide = false end
+    if db.minimapButton.point == nil then db.minimapButton.point = "TOPRIGHT" end
+    if db.minimapButton.x == nil then db.minimapButton.x = -30 end
+    if db.minimapButton.y == nil then db.minimapButton.y = -80 end
+    return db.minimapButton
+end
+
+-- =========================================================
+-- Minimal ElvUI-ish Helpers (soft / less "black box")
+-- =========================================================
+local function CreateBackdrop(frame, alpha, isPanel)
     frame:SetBackdrop({
         bgFile   = "Interface/Buttons/WHITE8x8",
         edgeFile = "Interface/Buttons/WHITE8x8",
         tile = false, tileSize = 0, edgeSize = 1,
         insets = { left = 1, right = 1, top = 1, bottom = 1 },
     })
-    frame:SetBackdropColor(0.08, 0.09, 0.10, alpha or 0.95)
-    frame:SetBackdropBorderColor(0.22, 0.24, 0.27, 1)
+
+    if isPanel then
+        frame:SetBackdropColor(0.10, 0.11, 0.12, alpha or 0.55)
+        frame:SetBackdropBorderColor(0.26, 0.28, 0.31, 1)
+    else
+        frame:SetBackdropColor(0.11, 0.12, 0.13, alpha or 0.82)
+        frame:SetBackdropBorderColor(0.30, 0.32, 0.35, 1)
+    end
 end
 
 local function CreateLabel(parent, text, size, r, g, b)
@@ -96,7 +115,7 @@ end
 local function CreateFlatButton(parent, w, h, text)
     local b = CreateFrame("Button", nil, parent, "BackdropTemplate")
     b:SetSize(w, h)
-    CreateBackdrop(b, 0.35)
+    CreateBackdrop(b, 0.45, true)
 
     b._text = CreateLabel(b, text or "", 12, 0.88, 0.90, 0.93)
     b._text:SetPoint("CENTER", 0, 0)
@@ -107,25 +126,25 @@ local function CreateFlatButton(parent, w, h, text)
     b._hl:SetAllPoints(b)
 
     b:SetScript("OnMouseDown", function(self)
-        self:SetBackdropColor(0.10, 0.11, 0.12, 0.55)
+        self:SetBackdropColor(0.12, 0.13, 0.14, 0.70)
     end)
 
     return b
 end
 
 local function SetButtonNormal(btn)
-    btn:SetBackdropColor(0.08, 0.09, 0.10, 0.35)
-    btn:SetBackdropBorderColor(0.22, 0.24, 0.27, 1)
+    btn:SetBackdropColor(0.10, 0.11, 0.12, 0.45)
+    btn:SetBackdropBorderColor(0.26, 0.28, 0.31, 1)
 end
 
 local function SetButtonActive(btn)
-    btn:SetBackdropColor(0.12, 0.13, 0.14, 0.70)
-    btn:SetBackdropBorderColor(0.22, 0.24, 0.27, 1)
+    btn:SetBackdropColor(0.13, 0.14, 0.15, 0.75)
+    btn:SetBackdropBorderColor(0.30, 0.32, 0.35, 1)
 end
 
 local function SetButtonPrimary(btn)
-    btn:SetBackdropColor(0.10, 0.12, 0.14, 0.55)
-    btn:SetBackdropBorderColor(0.28, 0.30, 0.34, 1)
+    btn:SetBackdropColor(0.12, 0.14, 0.16, 0.70)
+    btn:SetBackdropBorderColor(0.32, 0.34, 0.37, 1)
 end
 
 -- Clean Checkbox
@@ -135,7 +154,7 @@ local function CreateCheckbox(parent, labelText)
 
     c.box = CreateFrame("Frame", nil, c, "BackdropTemplate")
     c.box:SetAllPoints()
-    CreateBackdrop(c.box, 0.40)
+    CreateBackdrop(c.box, 0.45, true)
 
     c.tick = c.box:CreateTexture(nil, "OVERLAY")
     c.tick:SetTexture("Interface/Buttons/WHITE8x8")
@@ -159,7 +178,7 @@ local function CreateCheckbox(parent, labelText)
         c.box:SetBackdropBorderColor(0.35, 0.38, 0.42, 1)
     end)
     c:SetScript("OnLeave", function()
-        c.box:SetBackdropBorderColor(0.22, 0.24, 0.27, 1)
+        c.box:SetBackdropBorderColor(0.26, 0.28, 0.31, 1)
     end)
 
     return c
@@ -377,12 +396,16 @@ local function CreateDropdown(parent, width, labelText)
 end
 
 -- =========================================================
--- TAB CONTENT: Allgemein (Punkt 3)
+-- TAB CONTENT: Allgemein
 -- =========================================================
 local function BuildGeneralTab()
     local db = DB()
     db.general = db.general or {}
     if db.general.testMode == nil then db.general.testMode = false end
+    if db.general.lockFrames == nil then db.general.lockFrames = false end
+
+    -- Blizzard Toggle Default: AN (also verstecken) wie ElvUI
+    if db.general.hideBlizzardFrames == nil then db.general.hideBlizzardFrames = true end
 
     local c = MakeContentFrame()
     EnsureScrollChild()
@@ -425,8 +448,24 @@ local function BuildGeneralTab()
         SafeUpdateGrid()
     end)
 
+    local hideBlizzCB = CreateCheckbox(c, "Blizzard Frames ausblenden")
+    hideBlizzCB:SetPoint("TOPLEFT", lockCB, "BOTTOMLEFT", 0, -12)
+    hideBlizzCB:SetChecked(db.general.hideBlizzardFrames and true or false)
+
+    hideBlizzCB:SetScript("OnClick", function(self)
+        local newState = not self:GetChecked()
+        self:SetChecked(newState)
+        db.general.hideBlizzardFrames = newState and true or false
+
+        if RH.ApplyBlizzardFrameToggle then
+            pcall(function() RH:ApplyBlizzardFrameToggle() end)
+        else
+            print("|cffffcc00RexHeal|r: ApplyBlizzardFrameToggle fehlt (modules/BlizzardFrames.lua noch nicht angebunden).")
+        end
+    end)
+
     local status = CreateLabel(c, "", 12, 0.60, 0.62, 0.66)
-    status:SetPoint("TOPLEFT", lockCB.text, "BOTTOMLEFT", 0, -10)
+    status:SetPoint("TOPLEFT", hideBlizzCB, "BOTTOMLEFT", 0, -12)
     status:SetWidth(w - 12)
 
     local function RefreshTestUI()
@@ -466,12 +505,12 @@ local function BuildGeneralTab()
     RefreshTestButtonText()
     RefreshTestUI()
 
-    c:SetHeight(340)
-    SetScrollHeight(340)
+    c:SetHeight(380)
+    SetScrollHeight(380)
 end
 
 -- =========================================================
--- TAB CONTENT: Grid (Punkt 4)
+-- TAB CONTENT: Grid
 -- =========================================================
 local function BuildGridTab()
     local db = DB()
@@ -549,7 +588,11 @@ local function BuildGridTab()
     db.grid.groupSpacing = tonumber(db.grid.groupSpacing) or 18
     db.grid.raidShowGroups = tonumber(db.grid.raidShowGroups) or 8
 
-    AddSliderRow("Scale", 0.50, 2.00, 0.05, function() return db.grid.scale end, function(v) db.grid.scale = v end, function(v) return string.format("%.2f", v) end)
+    AddSliderRow("Scale", 0.50, 2.00, 0.05,
+        function() return db.grid.scale end,
+        function(v) db.grid.scale = v end,
+        function(v) return string.format("%.2f", v) end
+    )
     AddSliderRow("Breite", 40, 140, 1, function() return db.grid.width end, function(v) db.grid.width = v end)
     AddSliderRow("Höhe", 20, 90, 1, function() return db.grid.height end, function(v) db.grid.height = v end)
     AddSliderRow("Spacing", 0, 12, 1, function() return db.grid.spacing end, function(v) db.grid.spacing = v end)
@@ -573,7 +616,7 @@ local function BuildGridTab()
 end
 
 -- =========================================================
--- TAB CONTENT: Anzeige (Punkt 6)
+-- TAB CONTENT: Anzeige
 -- =========================================================
 local function BuildAnzeigeTab()
     local db = DB()
@@ -643,7 +686,9 @@ local function BuildClickCastTab()
     header:SetPoint("TOPLEFT", c, "TOPLEFT", 6, -6)
     header:SetWidth(w - 12)
 
-    local hint = CreateLabel(c, "Trage Spellnamen ein (genau wie im Zauberbuch). Leer = deaktiviert. Änderungen wirken sofort (außer im Kampf).", 12, 0.60, 0.62, 0.66)
+    local hint = CreateLabel(c, "Trage Spellnamen ein (genau wie im Zauberbuch). Leer = deaktiviert. Änderungen wirken sofort (außer im Kampf).",
+        12, 0.60, 0.62, 0.66
+    )
     hint:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -8)
     hint:SetWidth(w - 12)
 
@@ -720,28 +765,20 @@ local function BuildClickCastTab()
     end
 
     BindEditBox(rowUp.input, function() return cc.WheelUp end, function(v) cc.WheelUp = v end)
-BindEditBox(rowDown.input, function() return cc.WheelDown end, function(v) cc.WheelDown = v end)
+    BindEditBox(rowDown.input, function() return cc.WheelDown end, function(v) cc.WheelDown = v end)
 
--- Middle Mouse (Button 3) extra sichtbar
-local rowMid = CreateInputRow(c, w - 12, "Mittlere Maustaste (Taste 3)", "z.B. Reinigung / Dispel")
-rowMid:SetPoint("TOPLEFT", sep, "BOTTOMLEFT", 6, y)
-y = y - 52
+    local rowMid = CreateInputRow(c, w - 12, "Mittlere Maustaste (Taste 3)", "z.B. Reinigung / Dispel")
+    rowMid:SetPoint("TOPLEFT", sep, "BOTTOMLEFT", 6, y)
+    y = y - 52
 
-BindEditBox(rowMid.input,
-    function() return cc.bindings[3] end,
-    function(v) cc.bindings[3] = v end
-)
+    BindEditBox(rowMid.input, function() return cc.bindings[3] end, function(v) cc.bindings[3] = v end)
 
-	
     local rowY = y
     for i = 1, 16 do
         local r = CreateInputRow(c, w - 12, "Button " .. i, "z.B. Heilung / Heal")
         r:SetPoint("TOPLEFT", sep, "BOTTOMLEFT", 6, rowY)
 
-        BindEditBox(r.input,
-            function() return cc.bindings[i] end,
-            function(v) cc.bindings[i] = v end
-        )
+        BindEditBox(r.input, function() return cc.bindings[i] end, function(v) cc.bindings[i] = v end)
 
         rowY = rowY - 52
     end
@@ -749,6 +786,76 @@ BindEditBox(rowMid.input,
     local totalH = math.abs(rowY) + 140
     c:SetHeight(totalH)
     SetScrollHeight(totalH)
+end
+
+-- =========================================================
+-- TAB CONTENT: Minimap
+-- =========================================================
+local function BuildMinimapTab()
+    local mm = MiniDB()
+
+    local c = MakeContentFrame()
+    EnsureScrollChild()
+
+    local w = GetContentWidth()
+
+    local header = CreateLabel(c, "Minimap", 16, 0.92, 0.94, 0.97)
+    header:SetPoint("TOPLEFT", c, "TOPLEFT", 6, -6)
+    header:SetWidth(w - 12)
+
+    local hint = CreateLabel(c, "Minimap-Button für RexHeal (frei verschiebbar).", 12, 0.60, 0.62, 0.66)
+    hint:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -8)
+    hint:SetWidth(w - 12)
+
+    local sep = CreateDivider(c)
+    sep:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", 0, -12)
+    sep:SetPoint("TOPRIGHT", c, "TOPRIGHT", -6, 0)
+    sep:SetHeight(1)
+
+    local y = -18
+
+    local cb = CreateCheckbox(c, "Minimap-Button anzeigen")
+    cb:SetPoint("TOPLEFT", sep, "BOTTOMLEFT", 8, y)
+    cb:SetChecked((mm.hide ~= true) and true or false)
+
+    cb:SetScript("OnClick", function(self)
+        local newState = not self:GetChecked()
+        self:SetChecked(newState)
+
+        mm.hide = (newState ~= true)
+
+        if RH and RH.UpdateMinimapButton then
+            pcall(function() RH:UpdateMinimapButton() end)
+        end
+    end)
+
+    y = y - 46
+
+    local reset = CreateFlatButton(c, w - 12, 30, "Position zurücksetzen")
+    reset:SetPoint("TOPLEFT", sep, "BOTTOMLEFT", 6, y)
+    SetButtonNormal(reset)
+
+    reset:SetScript("OnClick", function()
+        mm.point = "TOPRIGHT"
+        mm.x = -30
+        mm.y = -80
+        mm.hide = false
+
+        cb:SetChecked(true)
+
+        if RH and RH.UpdateMinimapButton then
+            pcall(function() RH:UpdateMinimapButton() end)
+        end
+
+        print("|cff33ff99RexHeal|r: Minimap-Button Position zurückgesetzt.")
+    end)
+
+    local info = CreateLabel(c, "Tipp: Button im UI einfach mit der Maus ziehen.", 12, 0.60, 0.62, 0.66)
+    info:SetPoint("TOPLEFT", reset, "BOTTOMLEFT", 2, -12)
+    info:SetWidth(w - 12)
+
+    c:SetHeight(240)
+    SetScrollHeight(240)
 end
 
 -- =========================================================
@@ -786,6 +893,7 @@ local function BuildTab(tabName)
     elseif tabName == "Grid" then BuildGridTab()
     elseif tabName == "Anzeige" then BuildAnzeigeTab()
     elseif tabName == "ClickCast" then BuildClickCastTab()
+    elseif tabName == "Minimap" then BuildMinimapTab()
     else BuildPlaceholderTab(tabName) end
 end
 
@@ -810,7 +918,7 @@ local function CreateConfigFrame()
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
     f:SetClampedToScreen(true)
-    CreateBackdrop(f, 0.96)
+    CreateBackdrop(f, 0.82, false)
 
     f:SetScript("OnDragStart", function(self) self:StartMoving() end)
     f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
@@ -819,7 +927,7 @@ local function CreateConfigFrame()
     header:SetPoint("TOPLEFT", 1, -1)
     header:SetPoint("TOPRIGHT", -1, -1)
     header:SetHeight(34)
-    CreateBackdrop(header, 0.20)
+    CreateBackdrop(header, 0.35, true)
 
     local title = CreateLabel(header, "RexHeal – Alpha Config", 14, 0.92, 0.94, 0.97)
     title:SetPoint("LEFT", header, "LEFT", 12, 0)
@@ -840,11 +948,12 @@ local function CreateConfigFrame()
     nav:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
     nav:SetPoint("BOTTOMLEFT", body, "BOTTOMLEFT", 0, 0)
     nav:SetWidth(150)
-    CreateBackdrop(nav, 0.10)
+    CreateBackdrop(nav, 0.35, true)
 
     local scrollWrap = CreateFrame("Frame", nil, body, "BackdropTemplate")
     scrollWrap:SetPoint("TOPLEFT", nav, "TOPRIGHT", 1, 0)
     scrollWrap:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", 0, 0)
+    CreateBackdrop(scrollWrap, 0.25, true)
 
     scrollFrame = CreateFrame("ScrollFrame", nil, scrollWrap, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", scrollWrap, "TOPLEFT", 10, -10)

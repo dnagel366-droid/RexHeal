@@ -1,7 +1,6 @@
 -- =========================================================
 -- RexHeal core/Core.lua
 -- - Event Bootstrap
--- - Slash Command /rex
 -- - Modul-Ladegerüst
 -- =========================================================
 
@@ -25,40 +24,6 @@ RH._eventFrame = f
 RH._inCombat = InCombatLockdown() or false
 
 -- ---------------------------------------------------------
--- Slash Command /rex
--- ---------------------------------------------------------
-local function RegisterSlash()
-    SLASH_REXHEAL1 = "/rex"
-    SLASH_REXHEAL2 = "/rexheal"
-    SlashCmdList["REXHEAL"] = function(msg)
-        msg = (msg and msg:lower()) or ""
-
-        if msg == "reset" then
-            RH:ResetProfile()
-            print("|cff33ff99RexHeal|r: Profil wurde zurückgesetzt.")
-            return
-        end
-
-        -- PANIC FIX: Wheel Override manuell zurücksetzen
-        if msg == "wheelreset" then
-            if RH and RH._wheelOwner then
-                ClearOverrideBindings(RH._wheelOwner)
-                RH._wheelOwner = nil
-            end
-            print("|cff33ff99RexHeal|r: Wheel Override zurückgesetzt.")
-            return
-        end
-
-        -- Standard: Config öffnen
-        if RH.ToggleConfig then
-            RH:ToggleConfig()
-        else
-            print("|cffff4444RexHeal|r: Config nicht geladen (config/Config.lua).")
-        end
-    end
-end
-
--- ---------------------------------------------------------
 -- Modul-Gerüst (später: sichere Reihenfolge + ApplyAll)
 -- ---------------------------------------------------------
 function RH:CallModule(fnName, ...)
@@ -77,18 +42,24 @@ function RH:OnAddonLoaded(addonName)
     -- DB init
     RH:GetDB()
 
-    RegisterSlash()
+    -- Slash Commands init (/rh + /rex alias)
+    if RH.InitSlashCommands then RH:InitSlashCommands() end
 
-    print("|cff33ff99RexHeal|r geladen. Tippe |cffffffff/rex|r")
+    print("|cff33ff99RexHeal|r geladen. Tippe |cffffffff/rh|r oder |cffffffff/rex|r")
 end
 
 function RH:OnPlayerLogin()
-    -- Grid init (über Frames.lua Hook)
+    -- Grid init
     if _G.RexHeal_InitGrid then
         local ok, err = pcall(_G.RexHeal_InitGrid)
         if not ok then
             print("|cffff4444RexHeal Fehler:|r InitGrid", err)
         end
+    end
+
+    -- Minimap Button init
+    if RH.InitMinimapButton then
+        RH:InitMinimapButton()
     end
 end
 
